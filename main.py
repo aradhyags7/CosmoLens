@@ -1,8 +1,4 @@
 """
-╔══════════════════════════════════════════════════════════════════════════╗
-║     COSMO LENS  v6  —  REALISTIC MAPS  ·  FLAT MAP  +  3D GLOBE        ║
-║   pip install pygame sgp4 requests numpy                                ║
-╚══════════════════════════════════════════════════════════════════════════╝
 [V] Flat ↔ Globe   [SPACE] Pause   [S] Search   [H] Help   [ESC] Quit
 [1-9] Time warp    [R] Reset       [E] Export   [F3] Screenshot
 [F] Footprint  [O] Orbit  [T] Trails  [G] Grid  [N] Names  [C] Cities
