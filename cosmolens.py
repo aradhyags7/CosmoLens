@@ -1,8 +1,4 @@
 """
-╔══════════════════════════════════════════════════════════════════════════════╗
-║         COSMO LENS  —  STAR ATLAS  v2                                       ║
-║   pip install pygame skyfield numpy pandas                                  ║
-╚══════════════════════════════════════════════════════════════════════════════╝
 DRAG      Rotate sky          SCROLL  Zoom / FOV
 W/A/S/D   Keyboard rotate     R       Reset view
 C         Constellations       L       Const labels    G  RA/Dec grid
