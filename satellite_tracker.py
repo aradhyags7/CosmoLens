@@ -1,8 +1,9 @@
 """
-[V] Flat ↔ Globe   [SPACE] Pause   [S] Search   [H] Help   [ESC] Quit
+[V] Flat ↔ Globe   [SPACE] Pause   [S] Search   [H] Help   [Ctrl+Q] Quit
 [1-9] Time warp    [R] Reset       [E] Export   [F3] Screenshot
 [F] Footprint  [O] Orbit  [T] Trails  [G] Grid  [N] Names  [C] Cities
 [F1] Night  [F2] Terminator  [+/-] Trail length  [TAB] Next satellite
+[ESC] Deselect / Close help only
 """
 import pygame, math, time, threading, requests, datetime, csv, os, sys, random, json
 import numpy as np
@@ -33,7 +34,6 @@ TLE_SOURCES = {
     "Amateur":  "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle",
     "Debris":   "https://celestrak.org/NORAD/elements/gp.php?GROUP=cosmos-1408-debris&FORMAT=tle",
 }
-# Increased limits for more satellites
 MAX_PER = {
     "ISS/CSS": 8, "Starlink": 350, "GPS": 32, "Galileo": 36, "GLONASS": 30,
     "BeiDou": 50, "Iridium": 75, "Weather": 40, "Science": 40,
@@ -54,7 +54,6 @@ NE_CACHE = "ne_110m_land_cache.json"
 NE_URL   = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
 
 def fetch_natural_earth():
-    """Download + cache Natural Earth 110m land polygons. Returns list of (lat,lon) segments."""
     if os.path.exists(NE_CACHE):
         try:
             with open(NE_CACHE) as f:
@@ -89,7 +88,6 @@ def fetch_natural_earth():
         return None
 
 def split_antimeridian(coast):
-    """Split a (lat,lon) segment at the antimeridian to avoid rendering artifacts."""
     if len(coast) < 2:
         return [coast]
     segs, cur = [], [coast[0]]
@@ -102,7 +100,7 @@ def split_antimeridian(coast):
     if cur: segs.append(cur)
     return segs if segs else [coast]
 
-# ── BUILT-IN FALLBACK COASTLINES (simplified, used if NE download fails) ──────
+# ── BUILT-IN FALLBACK COASTLINES ──────────────────────────────────────────────
 COASTLINES_BUILTIN = [
     [(71,-141),(68,-166),(64,-162),(60,-147),(58,-137),(55,-132),(50,-127),
      (48,-124),(42,-124),(37,-122),(32,-117),(28,-110),(22,-97),(18,-88),
@@ -270,7 +268,7 @@ class NightCache:
         NightCache._globe_surf = full; NightCache._globe_key = key
         return full
 
-# ── FLAT MAP (pre-baked texture) ──────────────────────────────────────────────
+# ── FLAT MAP ──────────────────────────────────────────────────────────────────
 class FlatMap:
     def __init__(self, w, h):
         self.w = w; self.h = h; self._surf = None
@@ -281,27 +279,20 @@ class FlatMap:
 
     def _build(self):
         s = pygame.Surface((self.w, self.h))
-        # Ocean gradient
         for y in range(self.h):
             c = lerp_color((2,14,44), (1,8,26), y/self.h)
             pygame.draw.line(s, c, (0,y), (self.w,y))
-        # Subtle latitude banding
         bs = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
         for lat in range(-80, 81, 10):
             yp = int((90-lat)/180*self.h)
             pygame.draw.line(bs, (0,30,80, 3+abs(lat)//8), (0,yp), (self.w,yp))
         s.blit(bs, (0,0))
-
-        # Draw land from COASTLINES (NE data or fallback)
-        # Pass 1: fill
         for coast in COASTLINES:
             sub_segs = split_antimeridian(coast)
             for seg in sub_segs:
                 pts = [self._px(la, lo) for la, lo in seg]
                 if len(pts) > 2:
                     pygame.draw.polygon(s, (16, 38, 64), pts)
-
-        # Pass 2: better fill + coastline glow
         gl = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
         for coast in COASTLINES:
             sub_segs = split_antimeridian(coast)
@@ -314,8 +305,6 @@ class FlatMap:
                     pygame.draw.lines(gl, (55, 110, 168, 38), False, pts, 3)
                     pygame.draw.lines(gl, (75, 150, 210, 18), False, pts, 6)
         s.blit(gl, (0,0))
-
-        # Geo reference lines
         for lat, _, col in GEO_LINES:
             yp = int((90-lat)/180*self.h)
             if lat == 0:
@@ -352,10 +341,9 @@ class Globe:
         self._stars = s
 
     def _bake_land(self):
-        """Convert COASTLINES to numpy arrays for fast batch projection."""
         self._coast_arrays = []
         for coast in COASTLINES:
-            arr = np.array(coast, dtype=np.float32)  # shape (N,2): lat,lon
+            arr = np.array(coast, dtype=np.float32)
             if len(arr) >= 2:
                 self._coast_arrays.append(arr)
 
@@ -415,7 +403,6 @@ class Globe:
                 pygame.draw.polygon(land, (20, 44, 70), cur)
             if len(cur) > 1:
                 pygame.draw.lines(land, (38, 70, 108), False, cur, 1)
-        # Coastline glow
         for arr in self._coast_arrays:
             lat_a = arr[:,0]; lon_a = arr[:,1]
             sx, sy, z2 = self.project_batch(lat_a, lon_a)
@@ -445,7 +432,6 @@ class Globe:
             sx, sy, z2 = self.project_batch(lat_a, lon_a)
             pts = [(int(sx[i]),int(sy[i])) for i in range(len(z2)) if z2[i]>0]
             if len(pts)>1: pygame.draw.lines(gs, (255,255,255,13), False, pts, 1)
-        # Equator highlight
         lon_a = np.arange(-180, 182, 2, dtype=np.float32)
         lat_a = np.zeros_like(lon_a)
         sx, sy, z2 = self.project_batch(lat_a, lon_a)
@@ -608,7 +594,7 @@ class TLEManager:
     def get_sats(self):
         with self.lock: return list(self.satellites)
 
-# ── MINI FLAT MAP (for globe mode inset) ─────────────────────────────────────
+# ── MINI FLAT MAP ─────────────────────────────────────────────────────────────
 class MiniFlatMap:
     W2=200; H2=110
     def __init__(self):
@@ -902,9 +888,7 @@ class GroupFilter:
 
 # ── VIEW TOGGLE BUTTON ────────────────────────────────────────────────────────
 def draw_view_btn(surf, font, W, mode):
-    """Draw view toggle. Positioned right-of-center to avoid UTC overlap."""
     bw, bh = 188, 28
-    # Placed at right-center area, not overlapping UTC (which is at x~165)
     bx = W//2 + 40; by = 7
     for i, (lbl, vmode, vx) in enumerate([
         ("FLAT MAP", VIEW_FLAT,  bx),
@@ -923,30 +907,21 @@ def draw_view_btn(surf, font, W, mode):
 
 # ── HUD ───────────────────────────────────────────────────────────────────────
 def draw_hud(surf, fonts, sim_dt, W, H, warp_idx, paused, mode, zoom, status, sats):
-    # Top bar background
     bg = pygame.Surface((W,44), pygame.SRCALPHA)
     bg.fill((2,5,18,215))
     surf.blit(bg, (0,0))
-
-    # Logo — left side
     draw_text(surf, fonts.xl, "COSMO", 12, 3, (0,185,255))
     draw_text(surf, fonts.xl, "LENS",  92, 3, (228,244,255))
     draw_text(surf, fonts.sm, "SATELLITE TRACKER", 13, 28, (38,78,138))
-
-    # UTC + Warp — left-center (fixed: no longer overlaps view button)
     draw_text(surf, fonts.lg, sim_dt.strftime("UTC  %Y-%m-%d  %H:%M:%S"), 168, 5, (150,210,255))
     wp_col = (210,75,75) if paused else (75,210,115)
     draw_text(surf, fonts.lg, "⏸ PAUSED" if paused else f"▶ {WARP_LABELS[warp_idx]}", 168, 24, wp_col)
-
-    # Shortcuts — right side
     draw_text(surf, fonts.sm,
-              "[H]Help [S]Search [SPACE]Pause [R]Reset [E]Export [ESC]Quit",
+              "[H]Help [S]Search [SPACE]Pause [R]Reset [E]Export [Ctrl+Q]Quit",
               W-420, 5, (38,68,128))
     draw_text(surf, fonts.sm,
               "[F]Foot [O]Orbit [T]Trail [G]Grid [N]Names [C]Cities [F1]Night [F2]Term",
               W-420, 20, (32,58,112))
-
-    # Bottom bar
     bg2 = pygame.Surface((W,19), pygame.SRCALPHA)
     bg2.fill((2,5,18,200))
     surf.blit(bg2, (0, H-19))
@@ -973,7 +948,8 @@ HELP = [
     ("[G]","Grid"),("[N]","Names"),("[C]","Cities"),("[F1]","Night"),("[F2]","Terminator"),
     ("",""),
     ("OTHER",None), ("[S]","Search"), ("[TAB]","Next sat"),
-    ("[E]","Export CSV"), ("[F3]","Screenshot"), ("[H]","Help"), ("[ESC]","Quit"),
+    ("[E]","Export CSV"), ("[F3]","Screenshot"), ("[H]","Help"),
+    ("[ESC]","Deselect / Close help"),("[Ctrl+Q]","Quit"),
 ]
 
 def draw_help_ov(surf, fonts, W, H):
@@ -990,12 +966,10 @@ def draw_help_ov(surf, fonts, W, H):
             draw_text(surf, fonts.md, k, bx+16, ry, (175,212,255))
             draw_text(surf, fonts.md, v, bx+192, ry, (108,158,218))
 
-# ── MINI GLOBE INSET for flat map ─────────────────────────────────────────────
+# ── MINI GLOBE INSET ─────────────────────────────────────────────────────────
 def draw_mini_globe_inset(surf, fonts, W, H, sats, sel, sim_time, COASTLINES_REF):
-    """Draw a small 3D globe in the BOTTOM-LEFT (not right, to avoid groups panel)."""
     gl_s = pygame.Surface((156,156), pygame.SRCALPHA)
     R2 = 72; c2x = R2+6; c2y = R2+6
-    # Atmosphere glow
     for ri in range(R2+8, R2-1, -2):
         prog = (ri-R2)/8; a = int(55*prog*(1-prog)*4)
         if a > 0:
@@ -1032,7 +1006,6 @@ def draw_mini_globe_inset(surf, fonts, W, H, sats, sel, sim_time, COASTLINES_REF
             pygame.draw.circle(gl_s, col, p, 3 if sat is sel else 1)
 
     pygame.draw.circle(gl_s, (30,80,200), (c2x,c2y), R2, 1)
-    # Bottom-LEFT position
     surf.blit(gl_s, (10, H-160))
     draw_text(surf, fonts.xs, "3D VIEW", 22, H-18, (44,74,138))
 
@@ -1040,7 +1013,6 @@ def draw_mini_globe_inset(surf, fonts, W, H, sats, sel, sim_time, COASTLINES_REF
 def main():
     global COASTLINES
 
-    # ── Download Natural Earth coastlines for realistic maps ──────────────────
     ne = fetch_natural_earth()
     if ne:
         COASTLINES = ne
@@ -1056,7 +1028,7 @@ def main():
     except:
         pass
     screen = pygame.display.set_mode((W0,H0), flags)
-    pygame.display.set_caption("CosmoLens v6 — Realistic Maps + 3D Globe")
+    pygame.display.set_caption("CosmoLens v6 — Satellite Tracker")
     clock = pygame.time.Clock(); fonts = Fonts()
     W, H = W0, H0
 
@@ -1139,38 +1111,67 @@ def main():
 
             elif event.type == pygame.KEYDOWN:
                 if search.active:
-                    if event.key == pygame.K_ESCAPE: search.close()
+                    # ── Search box eats ALL keys — only these escape it ──
+                    if event.key == pygame.K_ESCAPE:
+                        search.close()
                     elif event.key == pygame.K_RETURN:
                         s2=search.sel()
                         if s2: sel=s2; passes_cache=[]
                         search.close()
-                    elif event.key == pygame.K_UP:   search.cur=max(0,search.cur-1)
-                    elif event.key == pygame.K_DOWN: search.cur=min(len(search.results)-1,search.cur+1)
+                    elif event.key == pygame.K_UP:
+                        search.cur=max(0,search.cur-1)
+                    elif event.key == pygame.K_DOWN:
+                        search.cur=min(len(search.results)-1,search.cur+1)
                     elif event.key == pygame.K_BACKSPACE:
                         search.q=search.q[:-1]; search.update(sats)
                     elif event.unicode and event.unicode.isprintable():
                         search.q+=event.unicode; search.update(sats)
+                    # ALL other keys while search is open: do nothing
+
                 else:
                     k = event.key
-                    if k == pygame.K_ESCAPE:
-                        if show_help: show_help=False
-                        elif sel: sel=None; passes_cache=[]
-                        else: running=False
-                    elif k == pygame.K_v:     mode = VIEW_GLOBE if mode==VIEW_FLAT else VIEW_FLAT
-                    elif k == pygame.K_SPACE: paused = not paused
+                    mods = pygame.key.get_mods()
+
+                    # ── QUIT: Ctrl+Q only (ESC never exits) ──────────────────
+                    if k == pygame.K_q and (mods & pygame.KMOD_CTRL):
+                        running = False
+
+                    # ── ESC: deselect / close overlays ONLY ──────────────────
+                    elif k == pygame.K_ESCAPE:
+                        if show_help:
+                            show_help = False
+                        elif sel:
+                            sel = None; passes_cache = []
+                        # If nothing to dismiss, ESC does nothing (no exit)
+
+                    # ── All other mapped keys ─────────────────────────────────
+                    elif k == pygame.K_v:
+                        mode = VIEW_GLOBE if mode==VIEW_FLAT else VIEW_FLAT
+                    elif k == pygame.K_SPACE:
+                        paused = not paused
                     elif k == pygame.K_r:
                         zoom=1.0; ox=oy=0.0
                         globe.lon_off=0.0; globe.tilt=0.2; globe.zoom=1.0
-                    elif k == pygame.K_f:  show_foot   = not show_foot
-                    elif k == pygame.K_o:  show_orbit  = not show_orbit
-                    elif k == pygame.K_t:  show_trails = not show_trails
-                    elif k == pygame.K_g:  show_grid   = not show_grid
-                    elif k == pygame.K_n:  show_names  = not show_names
-                    elif k == pygame.K_m:  show_inset  = not show_inset
-                    elif k == pygame.K_c:  show_cities = not show_cities
-                    elif k == pygame.K_h:  show_help   = not show_help
-                    elif k == pygame.K_a:  show_hud    = not show_hud
-                    elif k == pygame.K_s:  search.open(); search.update(sats)
+                    elif k == pygame.K_f:
+                        show_foot   = not show_foot
+                    elif k == pygame.K_o:
+                        show_orbit  = not show_orbit
+                    elif k == pygame.K_t:
+                        show_trails = not show_trails
+                    elif k == pygame.K_g:
+                        show_grid   = not show_grid
+                    elif k == pygame.K_n:
+                        show_names  = not show_names
+                    elif k == pygame.K_m:
+                        show_inset  = not show_inset
+                    elif k == pygame.K_c:
+                        show_cities = not show_cities
+                    elif k == pygame.K_h:
+                        show_help   = not show_help
+                    elif k == pygame.K_a:
+                        show_hud    = not show_hud
+                    elif k == pygame.K_s:
+                        search.open(); search.update(sats)
                     elif k == pygame.K_e:
                         emsg = f"✓ Exported → {do_export()}"; emsg_t=time.time()
                     elif k == pygame.K_TAB:
@@ -1180,18 +1181,21 @@ def main():
                             if mode==VIEW_GLOBE:
                                 globe.lon_off=-sel.lon
                                 globe.tilt=math.radians(-sel.lat*0.8)
-                    elif k in (pygame.K_PLUS, pygame.K_EQUALS):
+                    elif k in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
                         trail_len = min(MAX_TRAIL, trail_len+8)
-                    elif k == pygame.K_MINUS:
+                    elif k in (pygame.K_MINUS, pygame.K_KP_MINUS):
                         trail_len = max(8, trail_len-8)
-                    elif k == pygame.K_F1:  show_night = not show_night
-                    elif k == pygame.K_F2:  show_term  = not show_term
+                    elif k == pygame.K_F1:
+                        show_night = not show_night
+                    elif k == pygame.K_F2:
+                        show_term  = not show_term
                     elif k == pygame.K_F3:
                         fn = f"cosmo_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
                         pygame.image.save(screen, fn); emsg=f"📷 {fn}"; emsg_t=time.time()
                     elif event.unicode in "123456789":
                         idx = int(event.unicode)-1
                         if 0 <= idx < len(WARP_LEVELS): warp_idx=idx
+                    # ALL other keys: silently ignored — no exit, no crash
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 mx, my = event.pos
@@ -1256,9 +1260,7 @@ def main():
         # ── RENDER ───────────────────────────────────────────────────────────
         screen.fill((0,0,0))
 
-        # ══════════════════════════════════════════════════════════════════════
         if mode == VIEW_FLAT:
-        # ══════════════════════════════════════════════════════════════════════
             sm, mp = flat_map.get_scaled(zoom, ox, oy)
             screen.blit(sm, mp)
             if show_grid:   flat_grid(screen, fonts.xs, W, H, zoom, ox, oy)
@@ -1284,7 +1286,6 @@ def main():
                 sat.trail.append((sat.lon, sat.lat))
                 if len(sat.trail) > MAX_TRAIL: sat.trail.pop(0)
 
-                # ── FIXED: trails now visible with improved alpha formula ──
                 if show_trails:
                     trail = sat.trail[-trail_len:]
                     n = len(trail)
@@ -1294,7 +1295,6 @@ def main():
                         ay = int((90-trail[i-1][1])/180*H*zoom+oy)
                         bx_ = int((trail[i][0]+180)/360*W*zoom+ox)
                         by_ = int((90-trail[i][1])/180*H*zoom+oy)
-                        # Improved formula: visible from the start, brighter near satellite
                         alpha = int(25 + 200*(i/n)**0.65)
                         pygame.draw.line(trail_surf, (*col[:3], alpha), (ax,ay), (bx_,by_), 1)
 
@@ -1326,7 +1326,6 @@ def main():
             screen.blit(trail_surf, (0,0))
             screen.blit(glow_surf,  (0,0))
 
-            # Hover tooltip
             if hover and hover is not sel:
                 tx, ty = ll_to_flat(hover.lat, hover.lon, W, H, zoom, ox, oy)
                 tc = SAT_COLORS.get(hover.group, SAT_COLORS["Other"])
@@ -1339,13 +1338,10 @@ def main():
                 draw_text(screen, fonts.md, l0, tx2+7, ty2+3, tc)
                 draw_text(screen, fonts.sm, l1, tx2+7, ty2+19, (138,182,222))
 
-            # Mini globe inset — BOTTOM LEFT (fixed: no longer overlaps groups panel)
             if show_inset:
                 draw_mini_globe_inset(screen, fonts, W, H, sats, sel, sim_time, COASTLINES)
 
-        # ══════════════════════════════════════════════════════════════════════
         else:  # GLOBE VIEW
-        # ══════════════════════════════════════════════════════════════════════
             globe.draw_stars(screen)
             globe.draw_ocean(screen)
             globe.draw_land(screen)
@@ -1375,11 +1371,9 @@ def main():
                 sat.trail.append((sat.lon, sat.lat))
                 if len(sat.trail) > MAX_TRAIL: sat.trail.pop(0)
 
-                # ── FIXED: vectorised projection + proper index + None-check ──
                 if show_trails and len(sat.trail) > 1:
                     trail = sat.trail[-trail_len:]
                     n = len(trail)
-                    # Batch-project all trail points (much faster than single calls)
                     t_lons = np.array([p[0] for p in trail], dtype=np.float32)
                     t_lats = np.array([p[1] for p in trail], dtype=np.float32)
                     t_sx, t_sy, t_z2 = globe.project_batch(t_lats, t_lons)
@@ -1388,7 +1382,6 @@ def main():
                         if t_z2[ti] > 0:
                             pt = (int(t_sx[ti]), int(t_sy[ti]))
                             if prev_pt is not None and abs(t_lons[ti]-(prev_lon or t_lons[ti])) < 180:
-                                # Improved alpha formula — visible throughout, bright near sat
                                 alpha = int(20 + 195*(ti/n)**0.65)
                                 pygame.draw.line(trail_surf, (*col[:3], alpha), prev_pt, pt, 1)
                             prev_pt = pt; prev_lon = float(t_lons[ti])
@@ -1434,7 +1427,6 @@ def main():
                 draw_text(screen, fonts.md, l0, tx2+7, ty2+3, tc)
                 draw_text(screen, fonts.sm, l1, tx2+7, ty2+19, (138,182,222))
 
-            # Mini flat map inset — bottom left (no conflict with right-side groups)
             if show_inset:
                 mini.draw(screen, sats, sel, 12, H-MiniFlatMap.H2-26)
                 draw_text(screen, fonts.xs, "FLAT VIEW", 14, H-22, (44,74,138))
@@ -1454,7 +1446,6 @@ def main():
             draw_hud(screen, fonts, sim_time, W, H, warp_idx, paused, mode,
                      zoom if mode==VIEW_FLAT else globe.zoom, mgr.status, sats)
 
-        # ── View toggle button — positioned to NOT overlap UTC (fixed) ────────
         btn_f, btn_g = draw_view_btn(screen, fonts.btn, W, mode)
 
         if show_help: draw_help_ov(screen, fonts, W, H)
@@ -1466,10 +1457,7 @@ def main():
         pygame.display.flip()
         clock.tick(FPS)
 
-    pygame.quit(); sys.exit()
-
 
 if __name__ == "__main__":
     print(__doc__)
-    os.system(f"{sys.executable} -m pip install -q pygame sgp4 requests numpy")
     main()
